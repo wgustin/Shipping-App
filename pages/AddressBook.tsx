@@ -1,9 +1,10 @@
+
 import React, { useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { AddressForm } from '../components/AddressForm';
 import { Address } from '../types';
-import { mockValidateAddress } from '../services/mockApiService';
+import { validateAddress } from '../services/mockApiService';
 
 interface AddressBookProps {
   addresses: Address[];
@@ -58,7 +59,7 @@ export const AddressBook: React.FC<AddressBookProps> = ({ addresses, onAddAddres
                     onValidate={setIsValid}
                     savedAddresses={[]} // No need to look up saved addresses when adding a new one manually
                     onSelectSaved={() => {}}
-                    onCheckValid={mockValidateAddress}
+                    onCheckValid={validateAddress}
                 />
                 <div className="flex justify-end gap-3 mt-6 border-t border-slate-100 pt-4">
                     <Button variant="ghost" onClick={handleCancel}>Cancel</Button>

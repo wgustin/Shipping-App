@@ -1,13 +1,11 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+
+import { GoogleGenAI, Type } from "@google/genai";
 import { Address } from "../types";
 
-// Initialize Gemini
-// NOTE: In a real production app, you might proxy this through a backend to protect the key,
-// but for this frontend demo, we use the env variable directly as per instructions.
-const apiKey = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
+// Always use const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const addressSchema: Schema = {
+const addressSchema = {
   type: Type.OBJECT,
   properties: {
     name: { type: Type.STRING, description: "Full name of the person or business" },
@@ -22,14 +20,9 @@ const addressSchema: Schema = {
 };
 
 export const parseAddressWithAI = async (rawText: string): Promise<Partial<Address>> => {
-  if (!apiKey) {
-    console.warn("Gemini API Key is missing. Returning empty address.");
-    return {};
-  }
-
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3-flash-preview", // Selection based on basic text tasks
       contents: `Extract the postal address components from the following text into a JSON object. Text: "${rawText}"`,
       config: {
         responseMimeType: "application/json",
