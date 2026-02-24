@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
@@ -7,7 +8,8 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input: React.FC<InputProps> = ({ label, error, helperText, className = '', id, ...props }) => {
-  const inputId = id || props.name || Math.random().toString(36).substr(2, 9);
+  // Use the name as the ID if no ID is provided to ensure browser autofill consistency
+  const inputId = id || props.name;
 
   return (
     <div className={`w-full ${className}`}>
@@ -18,7 +20,7 @@ export const Input: React.FC<InputProps> = ({ label, error, helperText, classNam
       )}
       <input
         id={inputId}
-        className={`w-full px-3 py-2 border rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors
+        className={`w-full px-3 py-2 bg-white !bg-white text-slate-900 !text-slate-900 border rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors
           ${error ? 'border-red-300 focus:ring-red-200 focus:border-red-500' : 'border-slate-300'}
           disabled:bg-slate-100 disabled:text-slate-500
         `}

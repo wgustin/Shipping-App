@@ -1,3 +1,4 @@
+
 export interface Address {
   id?: string;
   name: string;
@@ -40,7 +41,7 @@ export interface Shipment {
   selectedRate: Rate;
   trackingNumber: string;
   labelUrl: string;
-  status: 'created' | 'shipped' | 'delivered';
+  status: 'created' | 'shipped' | 'delivered' | 'cancelled';
 }
 
 export interface User {
@@ -49,4 +50,5 @@ export interface User {
   lastName: string;
   email: string;
   balance: number;
+  defaultFromAddressId?: string;
 }

@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -7,10 +8,11 @@ interface DashboardProps {
   user: User;
   onCreateClick: () => void;
   onViewHistoryClick: () => void;
+  onViewShipmentClick: (id: string) => void;
   shipments: Shipment[];
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onViewHistoryClick, shipments }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onViewHistoryClick, onViewShipmentClick, shipments }) => {
   const recentShipments = shipments.slice(0, 3);
   const totalSpent = shipments.reduce((acc, curr) => acc + curr.selectedRate.totalAmount, 0);
   // Simulate 15% savings compared to retail rates
@@ -26,7 +28,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
           <Button 
             onClick={onCreateClick} 
             size="lg" 
-            className="bg-white text-blue-900 hover:bg-blue-50 border-none font-bold shadow-lg"
+            variant="outline"
+            className="bg-white text-blue-900 hover:bg-blue-50 border-none font-black shadow-xl px-8 transform transition-transform hover:-translate-y-0.5"
           >
             Create New Shipment
           </Button>
@@ -58,9 +61,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
                   </thead>
                   <tbody>
                     {recentShipments.map((s) => (
-                      <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                      <tr 
+                        key={s.id} 
+                        onClick={() => onViewShipmentClick(s.id)}
+                        className="border-b border-slate-50 hover:bg-slate-50 transition-colors cursor-pointer group"
+                      >
                         <td className="px-4 py-3 text-slate-900">{new Date(s.createdDate).toLocaleDateString()}</td>
-                        <td className="px-4 py-3 text-slate-700 font-medium">{s.toAddress.name}</td>
+                        <td className="px-4 py-3 text-slate-700 font-medium group-hover:text-blue-600 transition-colors">{s.toAddress.name}</td>
                         <td className="px-4 py-3 text-slate-600">
                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                                 {s.selectedRate.carrier}

@@ -3,99 +3,179 @@ import { Address, Rate, Shipment, PackageDetails } from "../types";
 import { getSupabase } from "./supabaseClient";
 import { parseAddressWithAI } from "./geminiService";
 
-/**
- * EHUB API CONFIGURATION
- * Note: Direct client-side calls to eHub/EasyPost usually require a proxy or 
- * Supabase Edge Function to avoid CORS and protect your API Key.
- * We assume the proxy is handled at '/api/shipping'.
- */
-const EHUB_PROXY_URL = '/api/shipping';
+// Security: Use environment variables if available, fallback to hardcoded for existing dev environment
+const EHUB_API_KEY = process.env.EHUB_API_KEY || "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NjY0MzUwNTUsImRhdGEiOnsidXNlciI6eyJpZCI6MjA0NTAsImN1c3RvbWVyX2lkIjoxNDAyOCwiZW1haWwiOiJiaWxsK3Rlc3RAZ2xvdmVkY29tbWVyY2UuY29tIn0sInNjb3BlcyI6WyJhcGlfcHVibGljIl19fQ.lyYvG0PjL1L1kGtxByMxLqXr8WMxrMSL218QMP1Ilp90gxHgnqfqy5W3oWVHkXvYUEUrve-T5QJ_pRqTFWpUTA";
+const EHUB_BASE_URL = "https://api.ehub.com/api/v2"; 
+const REQUEST_TIMEOUT_MS = 15000; 
 
 /**
- * Uses Gemini to standardize the address before API submission.
- * This fixes formatting issues that cause carrier API rejections.
+ * Standardizes addresses via Gemini to ensure highest success rate with carrier APIs
  */
 export const standardizeAddress = async (address: Address): Promise<Address> => {
   const rawText = `${address.name}, ${address.street1} ${address.street2 || ''}, ${address.city}, ${address.state} ${address.zip}, ${address.country}`;
-  const standardized = await parseAddressWithAI(rawText);
+  try {
+    const standardized = await parseAddressWithAI(rawText);
+    return {
+      ...address,
+      ...standardized as Address,
+      name: address.name || (standardized as any).name || "Recipient"
+    };
+  } catch (e) {
+    console.warn("AI standardization skipped due to error:", e);
+    return address;
+  }
+};
+
+/**
+ * Validates an address using the eHub v2 shipping/validate_address endpoint
+ */
+export const validateAddress = async (address: Address): Promise<{ isValid: boolean; messages: string[]; correctedAddress?: Address }> => {
+  console.group("🔍 eHub: Address Validation");
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const params = new URLSearchParams({
+      address1: address.street1 || '',
+      address2: address.street2 || '',
+      city: address.city || '',
+      state: address.state || '',
+      country: address.country || 'US',
+      postal_code: address.zip || ''
+    });
+
+    console.info("Request Params:", Object.fromEntries(params));
+
+    const response = await fetch(`${EHUB_BASE_URL}/shipping/validate_address?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      signal: controller.signal
+    });
+
+    const data = await response.json();
+    console.info("Response Data:", data);
+    clearTimeout(timeoutId);
+    
+    const hasErrors = data.errors && Array.isArray(data.errors) && data.errors.length > 0;
+    const isSuccess = response.ok && !hasErrors;
+
+    if (isSuccess) {
+      const apiAddr = data.address || data.standardized_address || (data.data && (data.data.address || data.standardized_address)) || data;
+      let correctedAddress: Address | undefined = undefined;
+      
+      if (apiAddr && typeof apiAddr === 'object') {
+        const zipField = apiAddr.postal_code || apiAddr.zip || apiAddr.zip_code || apiAddr.postalCode || apiAddr.postcode || address.zip;
+        const stateField = apiAddr.state || apiAddr.province || apiAddr.region || apiAddr.state_code || address.state;
+
+        correctedAddress = {
+          ...address,
+          street1: String(apiAddr.address1 || apiAddr.street1 || apiAddr.address_line1 || address.street1),
+          street2: String(apiAddr.address2 || apiAddr.street2 || apiAddr.address_line2 || address.street2 || ''),
+          city: String(apiAddr.city || apiAddr.locality || apiAddr.town || address.city),
+          state: String(stateField).toUpperCase().trim(),
+          zip: String(zipField).trim(),
+          country: String(apiAddr.country || apiAddr.country_code || apiAddr.countryCode || address.country || 'US').toUpperCase().trim()
+        };
+      }
+      console.groupEnd();
+      return { isValid: true, messages: [], correctedAddress };
+    } else {
+      const errors = data.errors || data.messages || data.error || (data.data && data.data.errors) || ["This address could not be verified by the carrier."];
+      console.warn("Validation Warnings/Errors:", errors);
+      console.groupEnd();
+      return { isValid: false, messages: Array.isArray(errors) ? errors : [errors] };
+    }
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    console.error("Validation Network/Timeout Error:", error);
+    console.groupEnd();
+    if (error.name === 'AbortError') return { isValid: false, messages: ["Address verification timed out. Please try again."] };
+    return { isValid: false, messages: ["Could not connect to verification service."] };
+  }
+};
+
+const formatAddressForEhub = (addr: Address) => {
   return {
-    ...address,
-    ...standardized as Address,
-    // Ensure we keep the name if the AI focus was just the location
-    name: address.name || (standardized as any).name
+    company: (addr.name || "Recipient").substring(0, 50),
+    first_name: "",
+    last_name: "",
+    phone: (addr.phone || "5555555555").replace(/\D/g, '').substring(0, 10) || "5555555555",
+    email: (addr.email || "customer@shipeasy.app").substring(0, 50),
+    address1: (addr.street1 || "").substring(0, 50),
+    address2: (addr.street2 || "").substring(0, 50),
+    city: (addr.city || "").substring(0, 35),
+    state: (addr.state || "").toUpperCase().trim().substring(0, 2),
+    country: (addr.country || "US").toUpperCase().trim().substring(0, 2),
+    postal_code: (addr.zip || "").trim().substring(0, 10)
   };
 };
 
-export const validateAddress = async (address: Address): Promise<{ isValid: boolean; messages: string[] }> => {
-  if (!address.street1 || !address.city || !address.state || !address.zip) {
-    return { isValid: false, messages: ["Street, City, State, and ZIP are required."] };
-  }
-  
-  // In a real eHub integration, you'd call /addresses/verify
-  // For now, we use a lightweight check
-  const zipRegex = /^\d{5}(-\d{4})?$/;
-  if (!zipRegex.test(address.zip) && address.country === 'US') {
-    return { isValid: false, messages: ["Invalid US ZIP code format."] };
-  }
-
-  return { isValid: true, messages: [] };
-};
-
 export const getRates = async (from: Address, to: Address, pkg: PackageDetails): Promise<Rate[]> => {
+  console.group("📊 eHub: Fetching Rates");
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   try {
-    // 1. Standardize addresses with Gemini to ensure high success rate
-    const cleanFrom = await standardizeAddress(from);
-    const cleanTo = await standardizeAddress(to);
+    const payload = {
+      shipment: {
+        from_location: formatAddressForEhub(from),
+        to_location: formatAddressForEhub(to),
+        parcels: [{
+          length: Number(pkg.length) || 1,
+          width: Number(pkg.width) || 1,
+          height: Number(pkg.height) || 1,
+          weight: Math.max(Number(pkg.weight) * 16.0, 1) 
+        }],
+        show_all_services: true
+      }
+    };
 
-    // 2. Call the eHub/Shipping Proxy
-    // Note: If you haven't set up the proxy yet, this will fail. 
-    // We add a fallback to simulated real-world data for demonstration.
-    const response = await fetch(`${EHUB_PROXY_URL}/rates`, {
+    console.info("Request Payload:", payload);
+
+    const response = await fetch(`${EHUB_BASE_URL}/rates`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: cleanFrom, to: cleanTo, package: pkg })
-    }).catch(() => null);
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
 
-    if (response && response.ok) {
-      return await response.json();
+    clearTimeout(timeoutId);
+
+    const data = await response.json();
+    console.info("Response Data:", data);
+
+    if (!response.ok) {
+      throw new Error(data.message || data.error || `Carrier Error (${response.status})`);
     }
 
-    // Fallback: Professional simulation of Real eHub Response Structure
-    await new Promise(r => setTimeout(r, 2000));
-    const basePrice = 5.45 + (Math.random() * 10);
-    
-    return [
-      { 
-        id: 'rate_usps_prio_' + Date.now(), 
-        carrier: 'USPS', 
-        serviceName: 'Priority Mail', 
-        totalAmount: parseFloat(basePrice.toFixed(2)), 
-        currency: 'USD', 
-        deliveryDays: 2, 
-        estimatedDeliveryDate: new Date(Date.now() + 172800000).toLocaleDateString() 
-      },
-      { 
-        id: 'rate_ups_gnd_' + Date.now(), 
-        carrier: 'UPS', 
-        serviceName: 'Ground', 
-        totalAmount: parseFloat((basePrice * 0.85).toFixed(2)), 
-        currency: 'USD', 
-        deliveryDays: 4, 
-        estimatedDeliveryDate: new Date(Date.now() + 345600000).toLocaleDateString() 
-      },
-      { 
-        id: 'rate_fedex_exp_' + Date.now(), 
-        carrier: 'FedEx', 
-        serviceName: 'Express Saver', 
-        totalAmount: parseFloat((basePrice * 2.1).toFixed(2)), 
-        currency: 'USD', 
-        deliveryDays: 3, 
-        estimatedDeliveryDate: new Date(Date.now() + 259200000).toLocaleDateString() 
-      }
-    ];
-  } catch (error) {
+    const rawRates = data.service_rates || [];
+    const mappedRates = rawRates.map((r: any) => ({
+      id: String(r.service_id),
+      carrier: String(r.carrier_code || "Carrier").toUpperCase(),
+      serviceName: String(r.service || "Shipping Service"),
+      totalAmount: parseFloat(String(r.rate || 0)),
+      currency: "USD",
+      deliveryDays: parseInt(String(r.delivery_days || 3), 10),
+      estimatedDeliveryDate: String(r.delivery_date || "3-5 Business Days")
+    }));
+
+    console.table(mappedRates);
+    console.groupEnd();
+    return mappedRates;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
     console.error("Rate Fetch Error:", error);
-    throw new Error("Failed to retrieve shipping rates. Please check your connection.");
+    console.groupEnd();
+    if (error.name === 'AbortError') throw new Error("Rate request timed out.");
+    throw error;
   }
 };
 
@@ -106,49 +186,190 @@ export const createShipment = async (
   rate: Rate,
   pkg: PackageDetails
 ): Promise<Shipment | null> => {
-  const supabase = await getSupabase();
-  if (!supabase) return null;
+  const logLabel = `Label Purchase (${Date.now()})`;
+  console.group(`🚀 ${logLabel}`);
+  console.time("Purchase Flow Duration");
+  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
 
   try {
-    // 1. In a real app, you would first call eHub to buy the label
-    // const purchaseResponse = await fetch(`${EHUB_PROXY_URL}/purchase`, { ... });
-    
-    // 2. Simulated real purchase response
-    const tracking = `${rate.carrier.substring(0,2).toUpperCase()}${Math.floor(Math.random() * 1000000000)}`;
-    const labelUrl = `https://api.label-provider.com/v1/labels/${tracking}.pdf`;
-
-    // 3. Save the actual record to the database
-    const { data, error } = await supabase
-      .from('shipments')
-      .insert([{
-        user_id: userId,
-        from_address_json: from,
-        to_address_json: to,
-        package_details: pkg,
-        selected_rate: rate,
-        tracking_number: tracking,
-        label_url: labelUrl,
-        status: 'created'
-      }])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return {
-      id: data.id,
-      createdDate: data.created_at,
-      fromAddress: data.from_address_json,
-      toAddress: data.to_address_json,
-      packageDetails: data.package_details,
-      selectedRate: data.selected_rate,
-      trackingNumber: data.tracking_number,
-      labelUrl: data.label_url,
-      status: data.status
+    const payload = {
+      shipment: {
+        to_location: formatAddressForEhub(to),
+        from_location: formatAddressForEhub(from),
+        return_location: formatAddressForEhub(from),
+        parcels: [{
+          length: Number(pkg.length) || 1,
+          width: Number(pkg.width) || 1,
+          height: Number(pkg.height) || 1,
+          weight: Math.max(Number(pkg.weight) * 16.0, 1),
+          package_type: "parcel"
+        }],
+        service_id: parseInt(rate.id, 10),
+        label_format: "pdf",
+        label_size: "4x6"
+      }
     };
-  } catch (error) {
-    console.error("Shipment Creation Error:", error);
+
+    console.info("1. eHub Request Payload:", payload);
+
+    const response = await fetch(`${EHUB_BASE_URL}/shipments/ship`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    const rawText = await response.text();
+    clearTimeout(timeoutId);
+
+    let ehubData;
+    try {
+      ehubData = JSON.parse(rawText);
+      console.info("2. eHub Response Data:", ehubData);
+    } catch (parseErr) {
+      console.error("2. Failed to parse response text:", rawText);
+      throw new Error(`Carrier sent non-JSON response (Status ${response.status}).`);
+    }
+
+    if (!response.ok) {
+      const errMsg = ehubData.message || ehubData.error || `Carrier Error: ${response.status}`;
+      console.error("❌ Carrier API Error Detail:", ehubData);
+      throw new Error(errMsg);
+    }
+
+    const sData = ehubData.shipment || ehubData;
+    const trackingNumber = sData.tracking_number || (sData.parcels && sData.parcels[0]?.tracking_number);
+    const labelUrl = sData.parcels && sData.parcels[0]?.postage_label?.image_url;
+    const carrierId = sData.id || ehubData.id || sData.shipment_id || ehubData.shipment_id;
+    
+    if (!trackingNumber) {
+        throw new Error("Label purchased, but no tracking number returned.");
+    }
+
+    const packageWithCarrierId = {
+        ...pkg,
+        carrierId: String(carrierId || "")
+    };
+
+    try {
+      console.info("3. Saving to Supabase Database...");
+      const supabase = await getSupabase();
+      if (!supabase) throw new Error("Supabase client not loaded.");
+
+      const { data: dbData, error: dbError } = await supabase
+        .from('shipments')
+        .insert([{
+          user_id: userId,
+          from_address_json: from,
+          to_address_json: to,
+          package_details: packageWithCarrierId,
+          selected_rate: rate,
+          tracking_number: trackingNumber,
+          label_url: labelUrl || "",
+          status: 'created'
+        }])
+        .select()
+        .single();
+
+      if (dbError) throw dbError;
+
+      console.timeEnd("Purchase Flow Duration");
+      console.groupEnd();
+      return {
+        id: dbData.id,
+        createdDate: dbData.created_at,
+        fromAddress: dbData.from_address_json,
+        toAddress: dbData.to_address_json,
+        packageDetails: dbData.package_details,
+        selectedRate: dbData.selected_rate,
+        trackingNumber: dbData.tracking_number,
+        labelUrl: dbData.label_url,
+        status: dbData.status
+      };
+    } catch (dbErr) {
+      console.warn("⚠️ Database Save Failed. Returning temporary object.", dbErr);
+      console.timeEnd("Purchase Flow Duration");
+      console.groupEnd();
+      return {
+          id: 'temp_' + Date.now(),
+          createdDate: new Date().toISOString(),
+          fromAddress: from,
+          toAddress: to,
+          packageDetails: packageWithCarrierId,
+          selectedRate: rate,
+          trackingNumber: trackingNumber,
+          labelUrl: labelUrl || "",
+          status: 'created'
+      };
+    }
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    console.error("❌ Purchase Flow Aborted:", error);
+    console.timeEnd("Purchase Flow Duration");
+    console.groupEnd();
+    if (error.name === 'AbortError') throw new Error("The request timed out after 60 seconds. Please check your history to see if the label was created.");
     throw error;
+  }
+};
+
+/**
+ * Voids a shipment (cancels the label)
+ */
+export const voidShipment = async (shipmentId: string): Promise<boolean> => {
+  console.group("🗑️ eHub: Voiding Label");
+  const supabase = await getSupabase();
+  if (!supabase) return false;
+
+  try {
+    const { data: shipment, error: fetchErr } = await supabase
+      .from('shipments')
+      .select('package_details, tracking_number')
+      .eq('id', shipmentId)
+      .single();
+    
+    if (fetchErr) throw new Error(`Could not access shipment record: ${fetchErr.message}`);
+
+    const carrierId = shipment?.package_details?.carrierId;
+    if (!carrierId) {
+        throw new Error("This shipment lacks a carrier ID required for cancellation.");
+    }
+
+    console.info("Requesting void for carrierId:", carrierId);
+
+    const response = await fetch(`${EHUB_BASE_URL}/shipments/${carrierId}/void`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+
+    const data = await response.json();
+    console.info("Void Response:", data);
+
+    if (!response.ok) {
+      throw new Error(data.message || data.error || "Carrier refused to void the label.");
+    }
+
+    const { error: updateErr } = await supabase
+      .from('shipments')
+      .update({ status: 'cancelled' })
+      .eq('id', shipmentId);
+
+    if (updateErr) throw updateErr;
+    console.groupEnd();
+    return true;
+  } catch (err: any) {
+    console.error("❌ Void Process Failed:", err);
+    console.groupEnd();
+    throw err;
   }
 };
 
@@ -177,17 +398,68 @@ export const fetchShipmentHistory = async (userId: string): Promise<Shipment[]> 
   }));
 };
 
+export const updateAddress = async (userId: string, addressId: string, address: Address) => {
+  const supabase = await getSupabase();
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from('addresses')
+    .update({
+      name: address.name,
+      company: address.company,
+      street1: address.street1,
+      street2: address.street2,
+      city: address.city,
+      state: address.state,
+      zip: address.zip,
+      country: address.country,
+      phone: address.phone,
+      email: address.email
+    })
+    .eq('id', addressId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+};
+
+export const deleteAddress = async (userId: string, addressId: string) => {
+  const supabase = await getSupabase();
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from('addresses')
+    .delete()
+    .eq('id', addressId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+};
+
+/**
+ * Set the default from address in the profiles table.
+ */
+export const setDefaultFromAddress = async (userId: string, addressId: string) => {
+  const supabase = await getSupabase();
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ default_from_address_id: addressId })
+    .eq('id', userId);
+
+  if (error) throw error;
+};
+
 export const saveAddressToBook = async (userId: string, address: Address) => {
   const supabase = await getSupabase();
   if (!supabase) return;
 
-  // Prevent duplicates based on name and street
   const { data: existing } = await supabase
     .from('addresses')
     .select('id')
     .eq('user_id', userId)
-    .eq('name', address.name)
     .eq('street1', address.street1)
+    .eq('zip', address.zip)
     .limit(1);
 
   if (existing && existing.length > 0) return;
@@ -199,7 +471,7 @@ export const saveAddressToBook = async (userId: string, address: Address) => {
       ...address
     }]);
   
-  if (error) console.error("Error saving address:", error);
+  if (error) console.error("Supabase address save error:", error);
 };
 
 export const fetchSavedAddresses = async (userId: string): Promise<Address[]> => {
@@ -212,5 +484,8 @@ export const fetchSavedAddresses = async (userId: string): Promise<Address[]> =>
     .eq('user_id', userId);
 
   if (error) return [];
-  return data;
+  return data.map((d: any) => ({
+    ...d,
+    id: d.id
+  }));
 };

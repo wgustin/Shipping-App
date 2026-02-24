@@ -3,67 +3,131 @@ import React, { useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { AddressForm } from '../components/AddressForm';
-import { Address } from '../types';
-import { validateAddress } from '../services/mockApiService';
+import { Address, User } from '../types';
+import { validateAddress, updateAddress, deleteAddress } from '../services/mockApiService';
 
 interface AddressBookProps {
+  user: User;
   addresses: Address[];
   onAddAddress: (address: Address) => void;
   onCreateShipment: (address: Address) => void;
+  onSetDefault: (addressId: string) => Promise<void>;
 }
 
 const emptyAddress: Address = {
     name: '', street1: '', city: '', state: '', zip: '', country: 'US'
 };
 
-export const AddressBook: React.FC<AddressBookProps> = ({ addresses, onAddAddress, onCreateShipment }) => {
+export const AddressBook: React.FC<AddressBookProps> = ({ user, addresses, onAddAddress, onCreateShipment, onSetDefault }) => {
   const [isAdding, setIsAdding] = useState(false);
-  const [newAddress, setNewAddress] = useState<Address>(emptyAddress);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [currentAddress, setCurrentAddress] = useState<Address>(emptyAddress);
   const [isValid, setIsValid] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const handleSave = () => {
-    if (isValid) {
-        onAddAddress(newAddress);
+  const handleSave = async () => {
+    if (!isValid) return;
+    
+    setIsSaving(true);
+    try {
+        if (editingId) {
+            await updateAddress(user.id, editingId, currentAddress);
+            window.location.reload(); 
+        } else {
+            onAddAddress(currentAddress);
+        }
         setIsAdding(false);
-        setNewAddress(emptyAddress);
+        setEditingId(null);
+        setCurrentAddress(emptyAddress);
         setIsValid(false);
+    } catch (e) {
+        alert("Failed to save address.");
+    } finally {
+        setIsSaving(false);
     }
+  };
+
+  const handleDelete = async () => {
+    if (!editingId) return;
+    if (!window.confirm("Are you sure you want to remove this address? This cannot be undone.")) return;
+
+    setIsDeleting(true);
+    try {
+        await deleteAddress(user.id, editingId);
+        window.location.reload();
+    } catch (e) {
+        alert("Failed to delete address.");
+    } finally {
+        setIsDeleting(false);
+    }
+  };
+
+  const handleEdit = (addr: Address) => {
+    setEditingId(addr.id || null);
+    setCurrentAddress({ ...addr });
+    setIsAdding(true);
+    setIsValid(true);
   };
 
   const handleCancel = () => {
       setIsAdding(false);
-      setNewAddress(emptyAddress);
+      setEditingId(null);
+      setCurrentAddress(emptyAddress);
   };
+
+  const sortedAddresses = [...addresses].sort((a, b) => {
+    if (a.id === user.defaultFromAddressId) return -1;
+    if (b.id === user.defaultFromAddressId) return 1;
+    return 0;
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
         <div>
-            <h2 className="text-2xl font-bold text-slate-900">Address Book</h2>
-            <p className="text-slate-500 text-sm mt-1">Manage your saved addresses for faster shipping.</p>
+            <h2 className="text-3xl font-bold text-slate-900">Address Book</h2>
+            <p className="text-slate-500 text-sm mt-1">Manage origins and frequent destinations.</p>
         </div>
         {!isAdding && (
             <Button onClick={() => setIsAdding(true)}>
-                + Add Address
+                + Add New Address
             </Button>
         )}
       </div>
 
       {isAdding ? (
           <div className="max-w-2xl mx-auto">
-              <Card title="Add New Address">
+              <Card title={editingId ? "Edit Address" : "Add New Address"}>
                 <AddressForm 
                     title="" 
-                    address={newAddress} 
-                    onChange={setNewAddress} 
+                    address={currentAddress} 
+                    onChange={setCurrentAddress} 
                     onValidate={setIsValid}
-                    savedAddresses={[]} // No need to look up saved addresses when adding a new one manually
+                    savedAddresses={[]} 
                     onSelectSaved={() => {}}
                     onCheckValid={validateAddress}
                 />
-                <div className="flex justify-end gap-3 mt-6 border-t border-slate-100 pt-4">
-                    <Button variant="ghost" onClick={handleCancel}>Cancel</Button>
-                    <Button onClick={handleSave} disabled={!isValid}>Save Address</Button>
+                <div className="flex items-center justify-between mt-6 border-t border-slate-100 pt-4">
+                    <div>
+                        {editingId && (
+                            <Button 
+                                variant="danger" 
+                                size="sm" 
+                                onClick={handleDelete} 
+                                isLoading={isDeleting}
+                                className="px-4"
+                            >
+                                Delete Address
+                            </Button>
+                        )}
+                    </div>
+                    <div className="flex gap-3">
+                        <Button variant="ghost" onClick={handleCancel} disabled={isSaving || isDeleting}>Cancel</Button>
+                        <Button onClick={handleSave} disabled={!isValid || isDeleting} isLoading={isSaving}>
+                            {editingId ? 'Update Address' : 'Save Address'}
+                        </Button>
+                    </div>
                 </div>
               </Card>
           </div>
@@ -80,36 +144,55 @@ export const AddressBook: React.FC<AddressBookProps> = ({ addresses, onAddAddres
                 </Card>
             ) : (
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {addresses.map((addr, idx) => (
-                        <Card key={idx} className="hover:border-blue-300 transition-colors flex flex-col justify-between h-full">
-                            <div>
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <h3 className="font-bold text-slate-900">{addr.name}</h3>
-                                        {addr.company && <p className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">{addr.company}</p>}
+                    {sortedAddresses.map((addr) => {
+                        const isDefault = addr.id === user.defaultFromAddressId;
+                        return (
+                            <Card key={addr.id} className={`transition-all flex flex-col justify-between h-full relative border-2 ${isDefault ? 'border-blue-500 shadow-lg shadow-blue-50' : 'hover:border-slate-300 border-slate-200'}`}>
+                                <div>
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="pr-12">
+                                            <h3 className="font-extrabold text-slate-900 text-lg leading-tight">{addr.name}</h3>
+                                            {addr.company && <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest mt-0.5">{addr.company}</p>}
+                                        </div>
                                     </div>
-                                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">
-                                        {addr.country}
-                                    </span>
+                                    <div className="space-y-0.5 text-sm text-slate-600 font-medium">
+                                        <p>{addr.street1}</p>
+                                        {addr.street2 && <p>{addr.street2}</p>}
+                                        <p>{addr.city}, {addr.state} {addr.zip}</p>
+                                        <p className="text-xs text-slate-400 mt-2 uppercase tracking-tighter">{addr.country}</p>
+                                    </div>
                                 </div>
-                                <div className="mt-4 space-y-1 text-sm text-slate-600">
-                                    <p>{addr.street1}</p>
-                                    {addr.street2 && <p>{addr.street2}</p>}
-                                    <p>{addr.city}, {addr.state} {addr.zip}</p>
+                                
+                                <div className="mt-8 pt-4 border-t border-slate-100 grid grid-cols-2 gap-2">
+                                    <Button 
+                                        size="sm" 
+                                        className="col-span-2 font-bold"
+                                        onClick={() => onCreateShipment(addr)}
+                                    >
+                                        Ship to this address
+                                    </Button>
+                                    <Button 
+                                        size="sm" 
+                                        variant="outline"
+                                        className="text-xs font-bold"
+                                        onClick={() => handleEdit(addr)}
+                                    >
+                                        <svg className="w-3 h-3 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                        Edit
+                                    </Button>
+                                    <Button 
+                                        size="sm" 
+                                        variant={isDefault ? "ghost" : "outline"}
+                                        className={`text-xs font-bold transition-all ${isDefault ? 'bg-slate-100 text-slate-400 border-slate-200 pointer-events-none cursor-default shadow-none' : ''}`}
+                                        onClick={() => addr.id && onSetDefault(addr.id)}
+                                        disabled={isDefault}
+                                    >
+                                        {isDefault ? 'Default from Address' : 'Set as Default'}
+                                    </Button>
                                 </div>
-                            </div>
-                            <div className="mt-6 pt-4 border-t border-slate-100 flex justify-end">
-                                <Button 
-                                    size="sm" 
-                                    variant="secondary" 
-                                    className="w-full md:w-auto text-xs"
-                                    onClick={() => onCreateShipment(addr)}
-                                >
-                                    Create Shipment
-                                </Button>
-                            </div>
-                        </Card>
-                    ))}
+                            </Card>
+                        );
+                    })}
                 </div>
             )}
         </>

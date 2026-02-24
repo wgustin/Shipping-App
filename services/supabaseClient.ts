@@ -1,7 +1,8 @@
 
-// Initialize Supabase with the project-specific credentials provided by the user.
-const SUPABASE_URL = 'https://outulhuazozssmnmdfcw.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_JcuNwX54U-lOwaRH2raHIA_wEXV0HKd';
+// Initialize Supabase with the project-specific credentials.
+// Environment variables are checked first for production security.
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://outulhuazozssmnmdfcw.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_JcuNwX54U-lOwaRH2raHIA_wEXV0HKd';
 
 let supabase: any = null;
 

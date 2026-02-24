@@ -1,8 +1,7 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { Address } from "../types";
 
-// Always use const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const addressSchema = {
@@ -19,31 +18,44 @@ const addressSchema = {
   required: ["street1", "city", "state", "zip"],
 };
 
+/**
+ * Wraps an async call with a timeout
+ */
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMessage)), timeoutMs))
+  ]);
+};
+
 export const parseAddressWithAI = async (rawText: string): Promise<Partial<Address>> => {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Selection based on basic text tasks
-      contents: `Extract the postal address components from the following text into a JSON object. Text: "${rawText}"`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: addressSchema,
-        temperature: 0.1, // Low temperature for deterministic extraction
-      },
-    });
+    // 10 second timeout for AI operations
+    // Fix: Explicitly type withTimeout with GenerateContentResponse to resolve the 'unknown' type error on response.text
+    const response = await withTimeout<GenerateContentResponse>(
+      ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Extract the postal address components from the following text into a JSON object. Text: "${rawText}"`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: addressSchema,
+          temperature: 0.1,
+        },
+      }),
+      10000,
+      "AI extraction took too long. Falling back to manual entry."
+    );
 
     const text = response.text;
     if (!text) return {};
 
     const parsed = JSON.parse(text);
-    
-    // Ensure default country if missing
-    if (!parsed.country) {
-      parsed.country = "US";
-    }
+    if (!parsed.country) parsed.country = "US";
 
     return parsed as Partial<Address>;
   } catch (error) {
     console.error("AI Address Parsing Error:", error);
+    // Return empty so the UI can proceed manually instead of staying stuck
     return {};
   }
 };
