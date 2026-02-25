@@ -10,7 +10,7 @@ import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 import { Card } from './components/ui/Card';
 import { getSupabase } from './services/supabaseClient';
-import { fetchShipmentHistory, fetchSavedAddresses, saveAddressToBook, setDefaultFromAddress } from './services/mockApiService';
+import { fetchShipmentHistory, fetchSavedAddresses, saveAddressToBook, setDefaultFromAddress, createShipment } from './services/mockApiService';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -21,6 +21,7 @@ const App: React.FC = () => {
   const [lastShipment, setLastShipment] = useState<Shipment | null>(null);
   const [initialShipmentAddress, setInitialShipmentAddress] = useState<Address | null>(null);
   const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
 
   // Form states for login/signup
   const [authEmail, setAuthEmail] = useState('');
@@ -44,8 +45,8 @@ const App: React.FC = () => {
 
   const getCarrierLogo = (carrier: string) => {
     const c = carrier.toUpperCase();
-    if (c.includes('USPS')) return 'https://sitetesting.shiptronix.com/images/USPS%20Logo.png';
-    if (c.includes('UPS')) return 'https://upload.wikimedia.org/wikipedia/commons/1/1b/UPS_logo_2014.svg';
+    if (c.includes('USPS')) return '/Images/USPS.svg';
+    if (c.includes('UPS')) return '/Images/UPS.svg';
     if (c.includes('FEDEX')) return 'https://upload.wikimedia.org/wikipedia/commons/9/9d/FedEx_Express_logo.svg';
     if (c.includes('DHL')) return 'https://upload.wikimedia.org/wikipedia/commons/a/ac/DHL_Logo.svg';
     return null;
@@ -90,16 +91,70 @@ const App: React.FC = () => {
     initAuth();
   }, []);
 
+  // Handle Stripe Redirect
+  useEffect(() => {
+    const handleStripeReturn = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const sessionId = params.get('session_id');
+      const status = params.get('status');
+
+      if (sessionId && status === 'success') {
+        setLoading(true);
+        try {
+          // Verify session with backend
+          const response = await fetch(`/api/checkout-session/${sessionId}`);
+          const session = await response.json();
+
+          if (session.payment_status === 'paid') {
+            // Retrieve pending shipment data
+            const pendingData = localStorage.getItem('pending_shipment');
+            if (pendingData) {
+              const { fromAddress, toAddress, pkg, selectedRate, userId } = JSON.parse(pendingData);
+              
+              // Create the actual shipment now that payment is confirmed
+              const shipment = await createShipment(userId, fromAddress, toAddress, selectedRate, pkg);
+              if (shipment) {
+                setShipments(prev => [shipment, ...prev]);
+                setLastShipment(shipment);
+                setCurrentPage('success');
+                localStorage.removeItem('pending_shipment');
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error processing Stripe return:", error);
+        } finally {
+          setLoading(false);
+          // Clean up URL
+          window.history.replaceState({}, document.title, "/");
+        }
+      } else if (status === 'cancel') {
+        // Handle cancellation
+        window.history.replaceState({}, document.title, "/");
+        setCurrentPage('create');
+      }
+    };
+
+    handleStripeReturn();
+  }, []);
+
   const loadUserProfile = async (userId: string) => {
     const supabase = await getSupabase();
     if (!supabase) return;
 
     try {
-      const { data: profile } = await supabase
+      // Use a shorter timeout for the profile fetch to avoid hanging the UI
+      const profilePromise = supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
+      
+      const { data: profile, error } = await profilePromise;
+      
+      if (error) {
+        throw error;
+      }
       
       if (profile) {
         setUser({
@@ -114,7 +169,16 @@ const App: React.FC = () => {
             setCurrentPage('dashboard');
         }
       } else {
-        const { data: { user: authUser } } = await supabase.auth.getUser();
+        throw new Error("No profile found");
+      }
+    } catch (err) {
+      console.warn("Database profile fetch failed, falling back to auth metadata:", err);
+      try {
+        // If the lock timeout occurred, getUser() might still fail. 
+        // We try to get the session first which is often faster/cached.
+        const { data: { session } } = await supabase.auth.getSession();
+        const authUser = session?.user;
+
         if (authUser) {
           setUser({
             id: authUser.id,
@@ -124,11 +188,29 @@ const App: React.FC = () => {
             balance: 0,
             defaultFromAddressId: undefined
           });
-          setCurrentPage('dashboard');
+          if (currentPage === 'landing' || currentPage === 'login' || currentPage === 'signup') {
+              setCurrentPage('dashboard');
+          }
+        } else {
+            // Last ditch effort: try getUser directly
+            const { data: { user: directUser } } = await supabase.auth.getUser();
+            if (directUser) {
+                setUser({
+                    id: directUser.id,
+                    firstName: directUser.user_metadata?.first_name || directUser.email?.split('@')[0] || 'New',
+                    lastName: directUser.user_metadata?.last_name || 'User',
+                    email: directUser.email || '',
+                    balance: 0,
+                    defaultFromAddressId: undefined
+                });
+                if (currentPage === 'landing' || currentPage === 'login' || currentPage === 'signup') {
+                    setCurrentPage('dashboard');
+                }
+            }
         }
+      } catch (fallbackErr) {
+        console.error("Critical: Could not load user even from auth metadata", fallbackErr);
       }
-    } catch (err) {
-      console.error("Error loading user profile:", err);
     }
   };
 
@@ -163,6 +245,9 @@ const App: React.FC = () => {
   const navigate = (page: string) => {
     setAuthError(null);
     setSelectedShipmentId(null);
+    if (page !== 'create') {
+        setInitialShipmentAddress(null);
+    }
     setCurrentPage(page);
     window.scrollTo(0, 0);
   };
@@ -184,7 +269,10 @@ const App: React.FC = () => {
         if (error) {
             console.error("Login Failure:", error);
             if (error.message === 'Invalid login credentials' || error.status === 400) {
-                throw new Error("Incorrect email or password. Please double-check your credentials and try again.");
+                throw new Error("Incorrect email or password. If you haven't created an account yet, please use the Sign Up option or try the Demo Login.");
+            }
+            if (error.message.includes('schema') || error.message.includes('database')) {
+                throw new Error("We're experiencing database connection issues. Please try the 'Demo Login' to explore the app while we fix this.");
             }
             throw error;
         }
@@ -203,6 +291,9 @@ const App: React.FC = () => {
         
         if (error) {
             console.error("Signup Failure:", error);
+            if (error.message.includes('schema') || error.message.includes('database')) {
+                throw new Error("Database setup is incomplete. Please use 'Demo Login' to see how the app works!");
+            }
             throw error;
         }
         console.info("Signup Success:", data);
@@ -220,6 +311,24 @@ const App: React.FC = () => {
       setAuthLoading(false);
       console.groupEnd();
     }
+  };
+
+  const handleDemoLogin = () => {
+    setAuthLoading(true);
+    setTimeout(() => {
+        setUser({
+          id: 'demo-user-123',
+          firstName: 'Demo',
+          lastName: 'User',
+          email: 'demo@shipeasy.app',
+          balance: 250.00,
+          defaultFromAddressId: undefined
+        });
+        setShipments([]);
+        setSavedAddresses([]);
+        setCurrentPage('dashboard');
+        setAuthLoading(false);
+    }, 800);
   };
 
   const handleLogout = async () => {
@@ -436,6 +545,15 @@ const App: React.FC = () => {
                         <Button className="w-full py-4 text-lg rounded-xl shadow-lg shadow-blue-100" onClick={handleAuth} isLoading={authLoading}>
                             {currentPage === 'login' ? 'Log In' : 'Create Free Account'}
                         </Button>
+                        
+                        <div className="relative py-2">
+                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-100"></div></div>
+                            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400 font-bold">Or try it out</span></div>
+                        </div>
+
+                        <Button variant="outline" className="w-full py-4 text-lg rounded-xl border-slate-200 hover:bg-slate-50" onClick={handleDemoLogin} disabled={authLoading}>
+                            Demo Login (No Account Needed)
+                        </Button>
                         <div className="text-center pt-4 border-t border-slate-100">
                             <button 
                                 onClick={() => navigate(currentPage === 'login' ? 'signup' : 'login')}
@@ -468,20 +586,58 @@ const App: React.FC = () => {
         return <CreateShipment user={user!} onComplete={handleShipmentComplete} savedAddresses={savedAddresses} onSaveAddress={handleSaveAddress} initialToAddress={initialShipmentAddress} />;
       
       case 'history':
+        const filteredShipments = shipments.filter(s => {
+            const term = historySearchTerm.toLowerCase();
+            return (
+                (s.trackingNumber || '').toLowerCase().includes(term) ||
+                (s.status || '').toLowerCase().includes(term) ||
+                // To Address
+                (s.toAddress.name || '').toLowerCase().includes(term) ||
+                (s.toAddress.street1 || '').toLowerCase().includes(term) ||
+                (s.toAddress.street2 || '').toLowerCase().includes(term) ||
+                (s.toAddress.city || '').toLowerCase().includes(term) ||
+                (s.toAddress.state || '').toLowerCase().includes(term) ||
+                (s.toAddress.zip || '').toLowerCase().includes(term) ||
+                // From Address
+                (s.fromAddress.name || '').toLowerCase().includes(term) ||
+                (s.fromAddress.street1 || '').toLowerCase().includes(term) ||
+                (s.fromAddress.city || '').toLowerCase().includes(term) ||
+                (s.fromAddress.state || '').toLowerCase().includes(term) ||
+                (s.fromAddress.zip || '').toLowerCase().includes(term) ||
+                // Rate Details
+                (s.selectedRate.carrier || '').toLowerCase().includes(term) ||
+                (s.selectedRate.serviceName || '').toLowerCase().includes(term)
+            );
+        });
+
         return (
             <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                       <h2 className="text-3xl font-bold text-slate-900">Shipment History</h2>
                       <p className="text-slate-500">Track and manage your past labels.</p>
                     </div>
-                    <Button onClick={() => navigate('create')} className="rounded-xl">New Shipment</Button>
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                        <div className="relative w-full md:w-64">
+                            <input
+                                type="text"
+                                placeholder="Search shipments..."
+                                value={historySearchTerm}
+                                onChange={(e) => setHistorySearchTerm(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                            />
+                            <svg className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                        </div>
+                        <Button onClick={() => navigate('create')} className="rounded-xl whitespace-nowrap">New Shipment</Button>
+                    </div>
                 </div>
-                {shipments.length === 0 ? (
-                    <Card><div className="text-center py-20 text-slate-500">No shipments found in your records.</div></Card>
+                {filteredShipments.length === 0 ? (
+                    <Card><div className="text-center py-20 text-slate-500">No shipments found.</div></Card>
                 ) : (
                     <div className="grid gap-4">
-                        {shipments.map(s => (
+                        {filteredShipments.map(s => (
                             <Card 
                                 key={s.id} 
                                 className={`transition-all group rounded-2xl cursor-pointer hover:border-blue-200 hover:shadow-md ${s.status === 'cancelled' ? 'opacity-60 grayscale' : ''}`}
@@ -530,39 +686,58 @@ const App: React.FC = () => {
         const savingsAmount = cost * 0.15;
         const carrierLogo = lastShipment ? getCarrierLogo(lastShipment.selectedRate.carrier) : null;
         const sRate = lastShipment?.selectedRate;
+        const pkg = lastShipment?.packageDetails;
         const displayServiceName = sRate?.serviceName.toUpperCase().startsWith(sRate?.carrier.toUpperCase() || '')
           ? sRate?.serviceName
           : `${sRate?.carrier} ${sRate?.serviceName}`;
 
         return (
-          <div className="max-w-xl mx-auto text-center space-y-4 pt-6 animate-in zoom-in duration-500">
-            <div className="relative mx-auto w-20 h-20 mb-2">
-                <div className="absolute inset-0 bg-green-400 rounded-full opacity-20 animate-ping"></div>
-                <div className="relative w-20 h-20 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center text-white text-4xl shadow-lg border-4 border-white">
-                    ✓
+          <div className="max-w-3xl mx-auto space-y-8 pt-8 pb-20 animate-in fade-in slide-in-from-bottom-8 duration-700">
+            
+            {/* Header Section with Print Button */}
+            <div className="text-center space-y-6">
+                <div className="relative mx-auto w-24 h-24">
+                    <div className="absolute inset-0 bg-green-400 rounded-full opacity-20 animate-ping"></div>
+                    <div className="relative w-24 h-24 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center text-white text-5xl shadow-xl border-4 border-white">
+                        ✓
+                    </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <h2 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight">Label Ready!</h2>
+                  <p className="text-slate-500 text-xl">Your package is ready to ship.</p>
+                </div>
+
+                <div className="flex justify-center">
+                    <a 
+                      href={lastShipment?.labelUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="inline-flex items-center gap-3 px-8 py-4 text-xl font-bold rounded-full text-white bg-blue-600 hover:bg-blue-700 shadow-xl shadow-blue-200 transition-all hover:-translate-y-1 active:scale-[0.98]"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                      Print Label Now
+                    </a>
                 </div>
             </div>
-            
-            <div className="space-y-1">
-              <h2 className="text-4xl font-black text-slate-900 tracking-tight">Label Ready!</h2>
-              <p className="text-slate-500 text-lg font-medium">Generated successfully and ready to print.</p>
-            </div>
-            
+
+            {/* Summary Card */}
             {lastShipment && (
-                <div className="bg-white rounded-[2rem] border border-slate-200 shadow-2xl overflow-hidden text-left flex flex-col">
-                    <div className="p-6 md:p-8 border-b border-slate-100 flex items-start justify-between gap-6 bg-slate-50/30">
-                        <div className="flex items-center gap-5 flex-1 min-w-0">
-                            <div className="w-16 h-16 md:w-20 md:h-20 bg-white rounded-2xl shadow-sm border border-slate-100 p-2 flex items-center justify-center flex-shrink-0">
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden">
+                    {/* Carrier & Service Header */}
+                    <div className="bg-slate-50/50 p-6 md:p-8 border-b border-slate-100 flex flex-col md:flex-row items-center justify-between gap-6">
+                        <div className="flex items-center gap-5">
+                            <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-slate-100 p-2 flex items-center justify-center">
                                 {carrierLogo ? (
                                     <img src={carrierLogo} alt={sRate?.carrier} className="max-h-full max-w-full object-contain" />
                                 ) : (
                                     <span className="text-xs font-bold uppercase text-slate-400">{sRate?.carrier}</span>
                                 )}
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[10px] text-blue-600 uppercase font-black tracking-widest mb-1">Shipping Service</p>
-                                <h3 className="font-extrabold text-slate-900 text-lg md:text-xl leading-tight break-words">{displayServiceName}</h3>
-                                <div className="mt-2 flex items-center gap-3">
+                            <div>
+                                <p className="text-xs text-blue-600 uppercase font-black tracking-widest mb-1">Service</p>
+                                <h3 className="font-extrabold text-slate-900 text-xl">{displayServiceName}</h3>
+                                <div className="mt-1 flex items-center gap-3">
                                     <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-xs font-bold uppercase">
                                         {sRate?.deliveryDays} {sRate?.deliveryDays === 1 ? 'day' : 'days'}
                                     </span>
@@ -570,38 +745,83 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                         </div>
+                        <div className="text-center md:text-right">
+                             <p className="text-xs text-slate-400 uppercase font-black tracking-widest mb-1">Tracking Number</p>
+                             <div className="font-mono text-lg font-bold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg select-all">
+                                {lastShipment.trackingNumber}
+                             </div>
+                        </div>
                     </div>
 
-                    <div className="p-6 md:p-8 space-y-6">
-                        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-                            <div className="flex-1 space-y-1">
-                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Tracking Number</p>
-                                <div className="bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl flex items-center justify-between">
-                                    <span className="font-mono text-sm md:text-base font-bold text-slate-900 tracking-wider">
-                                        {lastShipment.trackingNumber}
-                                    </span>
-                                    <button className="text-blue-600 hover:text-blue-800 p-1 rounded-lg transition-colors" title="Copy tracking number">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
-                                    </button>
+                    <div className="p-6 md:p-8 grid md:grid-cols-2 gap-8 md:gap-12 relative">
+                        {/* Vertical Divider for Desktop */}
+                        <div className="hidden md:block absolute left-1/2 top-8 bottom-8 w-px bg-slate-100"></div>
+
+                        {/* From / To Addresses */}
+                        <div className="space-y-8">
+                            <div>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-2 h-2 rounded-full bg-slate-300"></div>
+                                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">From</p>
+                                </div>
+                                <div className="pl-4 border-l-2 border-slate-100">
+                                    <p className="font-bold text-slate-900 text-lg">{lastShipment.fromAddress.name}</p>
+                                    <p className="text-slate-500 leading-relaxed">
+                                        {lastShipment.fromAddress.street1}<br/>
+                                        {lastShipment.fromAddress.street2 && <>{lastShipment.fromAddress.street2}<br/></>}
+                                        {lastShipment.fromAddress.city}, {lastShipment.fromAddress.state} {lastShipment.fromAddress.zip}
+                                    </p>
                                 </div>
                             </div>
-                            <div className="text-left md:text-right flex-shrink-0">
-                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1">Ship To</p>
-                                <p className="text-lg md:text-xl font-extrabold text-slate-900">{lastShipment.toAddress.name}</p>
+
+                            <div>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                                    <p className="text-xs font-black text-blue-500 uppercase tracking-widest">To Destination</p>
+                                </div>
+                                <div className="pl-4 border-l-2 border-blue-100">
+                                    <p className="font-bold text-slate-900 text-lg">{lastShipment.toAddress.name}</p>
+                                    <p className="text-slate-500 leading-relaxed">
+                                        {lastShipment.toAddress.street1}<br/>
+                                        {lastShipment.toAddress.street2 && <>{lastShipment.toAddress.street2}<br/></>}
+                                        {lastShipment.toAddress.city}, {lastShipment.toAddress.state} {lastShipment.toAddress.zip}
+                                    </p>
+                                </div>
                             </div>
                         </div>
 
-                        <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
-                            <div className="space-y-0.5">
-                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Postage Cost</p>
-                                <p className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">${cost.toFixed(2)}</p>
+                        {/* Package & Cost */}
+                        <div className="space-y-8">
+                            <div>
+                                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">Package Details</p>
+                                <div className="bg-slate-50 rounded-2xl p-5 grid grid-cols-2 gap-4">
+                                    <div>
+                                        <p className="text-xs text-slate-500 mb-1">Dimensions</p>
+                                        <p className="font-bold text-slate-900">{pkg?.length} x {pkg?.width} x {pkg?.height} {pkg?.unit}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-slate-500 mb-1">Weight</p>
+                                        <p className="font-bold text-slate-900">{pkg?.weight} {pkg?.weightUnit}</p>
+                                    </div>
+                                </div>
                             </div>
-                            
-                            <div className="bg-green-50 border border-green-100 rounded-2xl p-4 flex items-center gap-4 animate-in slide-in-from-right-4 delay-300">
-                                <div className="text-2xl">🎉</div>
-                                <div className="text-right">
-                                    <p className="text-[10px] text-green-600 font-black uppercase tracking-tight">Pro Savings</p>
-                                    <p className="text-2xl font-black text-green-700">-${savingsAmount.toFixed(2)}</p>
+
+                            <div>
+                                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">Payment Summary</p>
+                                <div className="space-y-3">
+                                    <div className="flex justify-between items-center text-slate-500">
+                                        <span>Subtotal</span>
+                                        <span>${(cost + savingsAmount).toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-green-600 font-medium">
+                                        <span>ShipEasy Discount</span>
+                                        <span>-${savingsAmount.toFixed(2)}</span>
+                                    </div>
+                                    <div className="h-px bg-slate-100 my-2"></div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-slate-900">Total Paid</span>
+                                        <span className="text-3xl font-black text-slate-900 tracking-tighter">${cost.toFixed(2)}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -609,20 +829,11 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            <div className="flex flex-col gap-4 pt-4">
-                <a 
-                  href={lastShipment?.labelUrl} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="w-full flex items-center justify-center gap-3 px-8 py-5 text-xl font-black rounded-2xl text-white bg-blue-600 hover:bg-blue-700 shadow-2xl shadow-blue-200 transition-all hover:-translate-y-1 active:scale-[0.98] select-none"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-                  Print Label Now
-                </a>
-                <div className="flex justify-center gap-8">
-                    <button onClick={() => navigate('dashboard')} className="text-slate-400 font-black text-xs hover:text-blue-600 transition-colors uppercase tracking-[0.2em]">Dashboard</button>
-                    <button onClick={() => navigate('create')} className="text-blue-600 font-black text-xs hover:text-blue-800 transition-colors uppercase tracking-[0.2em]">Ship Another</button>
-                </div>
+            {/* Footer Actions */}
+            <div className="flex justify-center gap-6 pt-4">
+                <button onClick={() => navigate('dashboard')} className="text-slate-500 font-bold text-sm hover:text-slate-800 transition-colors">Return to Dashboard</button>
+                <div className="w-px h-4 bg-slate-300 self-center"></div>
+                <button onClick={() => navigate('create')} className="text-blue-600 font-bold text-sm hover:text-blue-800 transition-colors">Create Another Label</button>
             </div>
           </div>
         );

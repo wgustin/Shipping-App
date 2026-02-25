@@ -3,9 +3,7 @@ import { Address, Rate, Shipment, PackageDetails } from "../types";
 import { getSupabase } from "./supabaseClient";
 import { parseAddressWithAI } from "./geminiService";
 
-// Security: Use environment variables if available, fallback to hardcoded for existing dev environment
-const EHUB_API_KEY = process.env.EHUB_API_KEY || "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NjY0MzUwNTUsImRhdGEiOnsidXNlciI6eyJpZCI6MjA0NTAsImN1c3RvbWVyX2lkIjoxNDAyOCwiZW1haWwiOiJiaWxsK3Rlc3RAZ2xvdmVkY29tbWVyY2UuY29tIn0sInNjb3BlcyI6WyJhcGlfcHVibGljIl19fQ.lyYvG0PjL1L1kGtxByMxLqXr8WMxrMSL218QMP1Ilp90gxHgnqfqy5W3oWVHkXvYUEUrve-T5QJ_pRqTFWpUTA";
-const EHUB_BASE_URL = "https://api.ehub.com/api/v2"; 
+// Security: Use environment variables
 const REQUEST_TIMEOUT_MS = 15000; 
 
 /**
@@ -35,24 +33,24 @@ export const validateAddress = async (address: Address): Promise<{ isValid: bool
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const params = new URLSearchParams({
+    const payload = {
       address1: address.street1 || '',
       address2: address.street2 || '',
       city: address.city || '',
       state: address.state || '',
       country: address.country || 'US',
       postal_code: address.zip || ''
-    });
+    };
 
-    console.info("Request Params:", Object.fromEntries(params));
+    console.info("Request Params:", payload);
 
-    const response = await fetch(`${EHUB_BASE_URL}/shipping/validate_address?${params.toString()}`, {
-      method: 'GET',
+    const response = await fetch('/api/validate-address', {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${EHUB_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
+      body: JSON.stringify(payload),
       signal: controller.signal
     });
 
@@ -136,10 +134,10 @@ export const getRates = async (from: Address, to: Address, pkg: PackageDetails):
 
     console.info("Request Payload:", payload);
 
-    const response = await fetch(`${EHUB_BASE_URL}/rates`, {
+    // Call our own backend proxy instead of eHub directly
+    const response = await fetch('/api/rates', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${EHUB_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
@@ -195,119 +193,44 @@ export const createShipment = async (
 
   try {
     const payload = {
-      shipment: {
-        to_location: formatAddressForEhub(to),
-        from_location: formatAddressForEhub(from),
-        return_location: formatAddressForEhub(from),
-        parcels: [{
-          length: Number(pkg.length) || 1,
-          width: Number(pkg.width) || 1,
-          height: Number(pkg.height) || 1,
-          weight: Math.max(Number(pkg.weight) * 16.0, 1),
-          package_type: "parcel"
-        }],
-        service_id: parseInt(rate.id, 10),
-        label_format: "pdf",
-        label_size: "4x6"
-      }
+      userId,
+      from,
+      to,
+      rate,
+      pkg
     };
 
-    console.info("1. eHub Request Payload:", payload);
+    console.info("1. Sending Shipment Request to Server:", payload);
 
-    const response = await fetch(`${EHUB_BASE_URL}/shipments/ship`, {
+    const supabase = await getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
+    const response = await fetch('/api/shipments', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${EHUB_API_KEY}`,
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : ''
       },
       body: JSON.stringify(payload),
       signal: controller.signal
     });
 
-    const rawText = await response.text();
     clearTimeout(timeoutId);
 
-    let ehubData;
-    try {
-      ehubData = JSON.parse(rawText);
-      console.info("2. eHub Response Data:", ehubData);
-    } catch (parseErr) {
-      console.error("2. Failed to parse response text:", rawText);
-      throw new Error(`Carrier sent non-JSON response (Status ${response.status}).`);
-    }
+    const data = await response.json();
+    console.info("2. Server Response:", data);
 
     if (!response.ok) {
-      const errMsg = ehubData.message || ehubData.error || `Carrier Error: ${response.status}`;
-      console.error("❌ Carrier API Error Detail:", ehubData);
+      const errMsg = data.error || data.message || `Server Error: ${response.status}`;
       throw new Error(errMsg);
     }
 
-    const sData = ehubData.shipment || ehubData;
-    const trackingNumber = sData.tracking_number || (sData.parcels && sData.parcels[0]?.tracking_number);
-    const labelUrl = sData.parcels && sData.parcels[0]?.postage_label?.image_url;
-    const carrierId = sData.id || ehubData.id || sData.shipment_id || ehubData.shipment_id;
-    
-    if (!trackingNumber) {
-        throw new Error("Label purchased, but no tracking number returned.");
-    }
+    console.timeEnd("Purchase Flow Duration");
+    console.groupEnd();
+    return data as Shipment;
 
-    const packageWithCarrierId = {
-        ...pkg,
-        carrierId: String(carrierId || "")
-    };
-
-    try {
-      console.info("3. Saving to Supabase Database...");
-      const supabase = await getSupabase();
-      if (!supabase) throw new Error("Supabase client not loaded.");
-
-      const { data: dbData, error: dbError } = await supabase
-        .from('shipments')
-        .insert([{
-          user_id: userId,
-          from_address_json: from,
-          to_address_json: to,
-          package_details: packageWithCarrierId,
-          selected_rate: rate,
-          tracking_number: trackingNumber,
-          label_url: labelUrl || "",
-          status: 'created'
-        }])
-        .select()
-        .single();
-
-      if (dbError) throw dbError;
-
-      console.timeEnd("Purchase Flow Duration");
-      console.groupEnd();
-      return {
-        id: dbData.id,
-        createdDate: dbData.created_at,
-        fromAddress: dbData.from_address_json,
-        toAddress: dbData.to_address_json,
-        packageDetails: dbData.package_details,
-        selectedRate: dbData.selected_rate,
-        trackingNumber: dbData.tracking_number,
-        labelUrl: dbData.label_url,
-        status: dbData.status
-      };
-    } catch (dbErr) {
-      console.warn("⚠️ Database Save Failed. Returning temporary object.", dbErr);
-      console.timeEnd("Purchase Flow Duration");
-      console.groupEnd();
-      return {
-          id: 'temp_' + Date.now(),
-          createdDate: new Date().toISOString(),
-          fromAddress: from,
-          toAddress: to,
-          packageDetails: packageWithCarrierId,
-          selectedRate: rate,
-          trackingNumber: trackingNumber,
-          labelUrl: labelUrl || "",
-          status: 'created'
-      };
-    }
   } catch (error: any) {
     clearTimeout(timeoutId);
     console.error("❌ Purchase Flow Aborted:", error);
@@ -342,13 +265,13 @@ export const voidShipment = async (shipmentId: string): Promise<boolean> => {
 
     console.info("Requesting void for carrierId:", carrierId);
 
-    const response = await fetch(`${EHUB_BASE_URL}/shipments/${carrierId}/void`, {
+    const response = await fetch('/api/void-shipment', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${EHUB_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
-      }
+      },
+      body: JSON.stringify({ carrierId })
     });
 
     const data = await response.json();
@@ -374,28 +297,36 @@ export const voidShipment = async (shipmentId: string): Promise<boolean> => {
 };
 
 export const fetchShipmentHistory = async (userId: string): Promise<Shipment[]> => {
-  const supabase = await getSupabase();
-  if (!supabase) return [];
+  try {
+    const supabase = await getSupabase();
+    if (!supabase) return [];
 
-  const { data, error } = await supabase
-    .from('shipments')
-    .select('*')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false });
+    const { data, error } = await supabase
+      .from('shipments')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
 
-  if (error) return [];
+    if (error) {
+      console.warn("Database error fetching history:", error);
+      return [];
+    }
 
-  return data.map((item: any) => ({
-    id: item.id,
-    createdDate: item.created_at,
-    fromAddress: item.from_address_json,
-    toAddress: item.to_address_json,
-    packageDetails: item.package_details,
-    selectedRate: item.selected_rate,
-    trackingNumber: item.tracking_number,
-    labelUrl: item.label_url,
-    status: item.status
-  }));
+    return (data || []).map((item: any) => ({
+      id: item.id,
+      createdDate: item.created_at,
+      fromAddress: item.from_address_json,
+      toAddress: item.to_address_json,
+      packageDetails: item.package_details,
+      selectedRate: item.selected_rate,
+      trackingNumber: item.tracking_number,
+      labelUrl: item.label_url,
+      status: item.status
+    }));
+  } catch (e) {
+    console.warn("Exception fetching history:", e);
+    return [];
+  }
 };
 
 export const updateAddress = async (userId: string, addressId: string, address: Address) => {
@@ -475,17 +406,26 @@ export const saveAddressToBook = async (userId: string, address: Address) => {
 };
 
 export const fetchSavedAddresses = async (userId: string): Promise<Address[]> => {
-  const supabase = await getSupabase();
-  if (!supabase) return [];
+  try {
+    const supabase = await getSupabase();
+    if (!supabase) return [];
 
-  const { data, error } = await supabase
-    .from('addresses')
-    .select('*')
-    .eq('user_id', userId);
+    const { data, error } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('user_id', userId);
 
-  if (error) return [];
-  return data.map((d: any) => ({
-    ...d,
-    id: d.id
-  }));
+    if (error) {
+      console.warn("Database error fetching addresses:", error);
+      return [];
+    }
+    
+    return (data || []).map((d: any) => ({
+      ...d,
+      id: d.id
+    }));
+  } catch (e) {
+    console.warn("Exception fetching addresses:", e);
+    return [];
+  }
 };

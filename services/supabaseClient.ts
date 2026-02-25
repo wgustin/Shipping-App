@@ -1,21 +1,55 @@
 
-// Initialize Supabase with the project-specific credentials.
-// Environment variables are checked first for production security.
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://outulhuazozssmnmdfcw.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_JcuNwX54U-lOwaRH2raHIA_wEXV0HKd';
+import { createClient } from '@supabase/supabase-js';
 
-let supabase: any = null;
+// Initialize Supabase with the project-specific credentials.
+const getEnvVar = (key: string) => {
+  // Check both process.env and import.meta.env for compatibility
+  if (typeof process !== 'undefined' && process.env && process.env[key]) {
+    return process.env[key];
+  }
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
+    return import.meta.env[key];
+  }
+  return '';
+};
+
+const rawSupabaseUrl = getEnvVar('SUPABASE_URL');
+const SUPABASE_ANON_KEY = getEnvVar('SUPABASE_ANON_KEY');
+
+// Ensure URL has protocol
+const SUPABASE_URL = rawSupabaseUrl && !rawSupabaseUrl.startsWith('http') 
+  ? `https://${rawSupabaseUrl}` 
+  : rawSupabaseUrl;
+
+let supabaseInstance: any = null;
+let initializationPromise: Promise<any> | null = null;
 
 export const getSupabase = async () => {
-  if (supabase) return supabase;
+  if (supabaseInstance) return supabaseInstance;
   
-  try {
-    // Dynamically importing the Supabase client to ensure compatibility with the runtime environment.
-    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm');
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    return supabase;
-  } catch (e) {
-    console.error("Failed to load Supabase client", e);
-    return null;
-  }
+  if (initializationPromise) return initializationPromise;
+
+  initializationPromise = (async () => {
+    try {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        console.warn("Supabase credentials missing. Auth and DB features will be limited.");
+        return null;
+      }
+
+      supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: {
+          autoRefreshToken: true,
+          persistSession: true,
+          detectSessionInUrl: true
+        }
+      });
+      return supabaseInstance;
+    } catch (e) {
+      console.error("Failed to initialize Supabase client", e);
+      initializationPromise = null;
+      return null;
+    }
+  })();
+
+  return initializationPromise;
 };

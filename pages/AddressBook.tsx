@@ -76,7 +76,21 @@ export const AddressBook: React.FC<AddressBookProps> = ({ user, addresses, onAdd
       setCurrentAddress(emptyAddress);
   };
 
-  const sortedAddresses = [...addresses].sort((a, b) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredAddresses = addresses.filter(addr => {
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      (addr.name || '').toLowerCase().includes(searchLower) ||
+      (addr.company || '').toLowerCase().includes(searchLower) ||
+      (addr.street1 || '').toLowerCase().includes(searchLower) ||
+      (addr.city || '').toLowerCase().includes(searchLower) ||
+      (addr.state || '').toLowerCase().includes(searchLower) ||
+      (addr.zip || '').toLowerCase().includes(searchLower)
+    );
+  });
+
+  const sortedAddresses = [...filteredAddresses].sort((a, b) => {
     if (a.id === user.defaultFromAddressId) return -1;
     if (b.id === user.defaultFromAddressId) return 1;
     return 0;
@@ -84,16 +98,30 @@ export const AddressBook: React.FC<AddressBookProps> = ({ user, addresses, onAdd
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
             <h2 className="text-3xl font-bold text-slate-900">Address Book</h2>
             <p className="text-slate-500 text-sm mt-1">Manage origins and frequent destinations.</p>
         </div>
-        {!isAdding && (
-            <Button onClick={() => setIsAdding(true)}>
-                + Add New Address
-            </Button>
-        )}
+        <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="relative w-full md:w-64">
+                <input
+                    type="text"
+                    placeholder="Search addresses..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
+                <svg className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+            </div>
+            {!isAdding && (
+                <Button onClick={() => setIsAdding(true)} className="whitespace-nowrap">
+                    + Add New
+                </Button>
+            )}
+        </div>
       </div>
 
       {isAdding ? (
@@ -172,18 +200,18 @@ export const AddressBook: React.FC<AddressBookProps> = ({ user, addresses, onAdd
                                         Ship to this address
                                     </Button>
                                     <Button 
-                                        size="sm" 
+                                        size="xs" 
                                         variant="outline"
-                                        className="text-xs font-bold"
+                                        className="font-bold"
                                         onClick={() => handleEdit(addr)}
                                     >
                                         <svg className="w-3 h-3 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                                         Edit
                                     </Button>
                                     <Button 
-                                        size="sm" 
+                                        size="xs" 
                                         variant={isDefault ? "ghost" : "outline"}
-                                        className={`text-xs font-bold transition-all ${isDefault ? 'bg-slate-100 text-slate-400 border-slate-200 pointer-events-none cursor-default shadow-none' : ''}`}
+                                        className={`font-bold transition-all ${isDefault ? 'bg-slate-100 text-slate-400 border-slate-200 pointer-events-none cursor-default shadow-none' : ''}`}
                                         onClick={() => addr.id && onSetDefault(addr.id)}
                                         disabled={isDefault}
                                     >

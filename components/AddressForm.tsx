@@ -200,58 +200,63 @@ export const AddressForm: React.FC<AddressFormProps> = ({
          </div>
       )}
 
-      <form className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${mode !== 'manual' ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+      <form className={`space-y-4 ${mode !== 'manual' ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input
+              label="Full Name"
+              name={`${context}_name`}
+              id={`${baseId}_name`}
+              autoComplete={`${context} name`}
+              value={address.name}
+              onChange={(e) => handleChange('name', e.target.value)}
+              placeholder="Recipient Name"
+              required
+            />
+            <Input
+              label="Company"
+              name={`${context}_organization`}
+              id={`${baseId}_organization`}
+              autoComplete={`${context} organization`}
+              value={address.company || ''}
+              onChange={(e) => handleChange('company', e.target.value)}
+              placeholder="Company Name"
+            />
+        </div>
+
         <Input
-          label="Full Name"
-          name={`${context}_name`}
-          id={`${baseId}_name`}
-          autoComplete={`${context} name`}
-          value={address.name}
-          onChange={(e) => handleChange('name', e.target.value)}
-          placeholder="Recipient Name"
+          label="Street address"
+          name={`${context}_address_line1`}
+          id={`${baseId}_address_line1`}
+          autoComplete={`${context} address-line1`}
+          value={address.street1}
+          onChange={(e) => handleChange('street1', e.target.value)}
+          placeholder="123 Main St"
           required
         />
-        <Input
-          label="Company (Optional)"
-          name={`${context}_organization`}
-          id={`${baseId}_organization`}
-          autoComplete={`${context} organization`}
-          value={address.company || ''}
-          onChange={(e) => handleChange('company', e.target.value)}
-          placeholder="Company Name"
-        />
-        <div className="md:col-span-2">
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
-              label="Street address"
-              name={`${context}_address_line1`}
-              id={`${baseId}_address_line1`}
-              autoComplete={`${context} address-line1`}
-              value={address.street1}
-              onChange={(e) => handleChange('street1', e.target.value)}
-              placeholder="123 Main St"
+              label="Apartment, suite, unit"
+              name={`${context}_address_line2`}
+              id={`${baseId}_address_line2`}
+              autoComplete={`${context} address-line2`}
+              value={address.street2 || ''}
+              onChange={(e) => handleChange('street2', e.target.value)}
+              placeholder="Apt 4B"
+            />
+            <Input
+              label="City"
+              name={`${context}_city`}
+              id={`${baseId}_city`}
+              autoComplete={`${context} address-level2`}
+              value={address.city}
+              onChange={(e) => handleChange('city', e.target.value)}
+              placeholder="City"
               required
             />
         </div>
-        <Input
-          label="Apartment, suite, unit (Optional)"
-          name={`${context}_address_line2`}
-          id={`${baseId}_address_line2`}
-          autoComplete={`${context} address-line2`}
-          value={address.street2 || ''}
-          onChange={(e) => handleChange('street2', e.target.value)}
-          placeholder="Apt 4B"
-        />
-        <Input
-          label="City"
-          name={`${context}_city`}
-          id={`${baseId}_city`}
-          autoComplete={`${context} address-level2`}
-          value={address.city}
-          onChange={(e) => handleChange('city', e.target.value)}
-          placeholder="City"
-          required
-        />
-        <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+
+        <div className="grid grid-cols-3 gap-4">
             <Input
               label="State"
               name={`${context}_state`}
@@ -297,10 +302,9 @@ export const AddressForm: React.FC<AddressFormProps> = ({
                 <Button 
                     type="button"
                     variant="outline" 
-                    size="sm" 
+                    size="xs" 
                     onClick={handleManualValidate}
                     isLoading={manualStatus === 'loading'}
-                    className="text-xs py-1 h-8"
                 >
                     Validate Address
                 </Button>

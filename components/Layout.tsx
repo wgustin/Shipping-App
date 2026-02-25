@@ -13,7 +13,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     <div className="min-h-screen flex flex-col bg-slate-50">
       {/* Navbar */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[76rem] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center cursor-pointer" onClick={() => onNavigate(user ? 'dashboard' : 'landing')}>
               <div className="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold mr-2">
@@ -70,13 +70,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-grow w-full max-w-[76rem] mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {children}
       </main>
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div className="max-w-[76rem] mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <p className="text-center text-sm text-slate-500">
             © {new Date().getFullYear()} ShipEasy Inc. All rights reserved.
           </p>

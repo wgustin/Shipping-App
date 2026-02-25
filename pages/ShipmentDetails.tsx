@@ -4,6 +4,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Shipment } from '../types';
 import { voidShipment } from '../services/mockApiService';
+import { getTrackingUrl } from '../utils/tracking';
 
 interface ShipmentDetailsProps {
   shipment: Shipment;
@@ -30,8 +31,8 @@ export const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipment, onBa
 
   const getCarrierLogo = (carrier: string) => {
     const c = carrier.toUpperCase();
-    if (c.includes('USPS')) return 'https://sitetesting.shiptronix.com/images/USPS%20Logo.png';
-    if (c.includes('UPS')) return 'https://upload.wikimedia.org/wikipedia/commons/1/1b/UPS_logo_2014.svg';
+    if (c.includes('USPS')) return '/Images/USPS.svg';
+    if (c.includes('UPS')) return '/Images/UPS.svg';
     if (c.includes('FEDEX')) return 'https://upload.wikimedia.org/wikipedia/commons/9/9d/FedEx_Express_logo.svg';
     if (c.includes('DHL')) return 'https://upload.wikimedia.org/wikipedia/commons/a/ac/DHL_Logo.svg';
     return null;
@@ -40,7 +41,7 @@ export const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipment, onBa
   const isCancelled = shipment.status === 'cancelled';
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+    <div className="max-w-6xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="flex items-center text-slate-500 hover:text-slate-900 font-bold text-sm uppercase tracking-widest transition-colors">
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
@@ -71,7 +72,14 @@ export const ShipmentDetails: React.FC<ShipmentDetailsProps> = ({ shipment, onBa
                     </div>
                     <div className="w-full sm:w-auto text-center sm:text-right bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
                         <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest mb-1">Tracking Number</p>
-                        <p className="font-mono text-lg font-black text-slate-900 tracking-wider">{shipment.trackingNumber}</p>
+                        <a 
+                            href={getTrackingUrl(shipment.selectedRate.carrier, shipment.trackingNumber)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-mono text-lg font-black text-slate-900 tracking-wider hover:text-blue-600 hover:underline"
+                        >
+                            {shipment.trackingNumber}
+                        </a>
                     </div>
                 </div>
             </Card>

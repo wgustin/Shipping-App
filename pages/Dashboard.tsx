@@ -3,6 +3,7 @@ import React from 'react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Shipment, User } from '../types';
+import { getTrackingUrl } from '../utils/tracking';
 
 interface DashboardProps {
   user: User;
@@ -21,7 +22,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
       {/* Welcome Hero */}
-      <div className="bg-gradient-to-r from-blue-900 to-slate-800 rounded-2xl p-8 md:p-12 text-white shadow-xl">
+      <div className="bg-gradient-to-r from-blue-900 to-slate-800 rounded-2xl p-8 md:p-12 text-white shadow-xl flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8">
         <div className="max-w-2xl">
           <h1 className="text-3xl md:text-4xl font-bold mb-4">Welcome back, {user.firstName}!</h1>
           <p className="text-blue-100 text-lg mb-8">Ready to send something somewhere? We've got the best rates waiting for you.</p>
@@ -34,11 +35,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
             Create New Shipment
           </Button>
         </div>
+
+        {/* Quick Stats moved to Hero */}
+        <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto">
+            <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/10 min-w-[140px]">
+                <div className="text-blue-200 text-sm font-medium mb-1">Total Spent</div>
+                <div className="text-2xl font-bold text-white">${totalSpent.toFixed(2)}</div>
+            </div>
+            <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/10 min-w-[140px]">
+                <div className="text-blue-200 text-sm font-medium mb-1">Total Saved</div>
+                <div className="text-2xl font-bold text-green-400">${totalSaved.toFixed(2)}</div>
+            </div>
+            <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/10 min-w-[140px]">
+                <div className="text-blue-200 text-sm font-medium mb-1">Shipments</div>
+                <div className="text-2xl font-bold text-white">{shipments.length}</div>
+            </div>
+        </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-6">
+      <div className="w-full">
         <Card 
-            className="md:col-span-2" 
             title="Recent Activity" 
             actions={
                 <Button variant="outline" size="sm" onClick={onViewHistoryClick}>View History</Button>
@@ -56,6 +72,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
                       <th className="px-4 py-3 font-medium">Date</th>
                       <th className="px-4 py-3 font-medium">Recipient</th>
                       <th className="px-4 py-3 font-medium">Carrier</th>
+                      <th className="px-4 py-3 font-medium">Tracking</th>
                       <th className="px-4 py-3 font-medium text-right">Cost</th>
                     </tr>
                   </thead>
@@ -73,6 +90,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
                                 {s.selectedRate.carrier}
                              </span>
                         </td>
+                        <td className="px-4 py-3 text-slate-500 font-mono text-xs">
+                          <a 
+                            href={getTrackingUrl(s.selectedRate.carrier, s.trackingNumber)} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="hover:text-blue-600 hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {s.trackingNumber}
+                          </a>
+                        </td>
                         <td className="px-4 py-3 text-slate-900 text-right font-medium">${s.selectedRate.totalAmount.toFixed(2)}</td>
                       </tr>
                     ))}
@@ -80,27 +108,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onCreateClick, onVie
                 </table>
              </div>
           )}
-        </Card>
-
-        <Card title="Quick Stats">
-            <div className="space-y-4">
-                <div className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                    <span className="text-slate-500 text-sm">Total Spent</span>
-                    <span className="font-bold text-slate-900">
-                        ${totalSpent.toFixed(2)}
-                    </span>
-                </div>
-                <div className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                    <span className="text-slate-500 text-sm">Total Saved</span>
-                    <span className="font-bold text-green-600">
-                        ${totalSaved.toFixed(2)}
-                    </span>
-                </div>
-                <div className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                    <span className="text-slate-500 text-sm">Shipments</span>
-                    <span className="font-bold text-slate-900">{shipments.length}</span>
-                </div>
-            </div>
         </Card>
       </div>
     </div>
