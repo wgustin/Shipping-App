@@ -188,6 +188,7 @@ export const CreateShipment: React.FC<{
     if (!selectedRate) return;
     
     setIsPaymentModalOpen(false);
+    setClientSecret(null); // Prevent reuse of terminal PaymentIntent
     setIsProcessingPayment(true); // Show loading while creating shipment
 
     try {

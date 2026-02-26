@@ -1,15 +1,23 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import dotenv from "dotenv";
-
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2023-10-16", // Use a stable API version
-});
+let stripeClient: Stripe | null = null;
+const getStripe = () => {
+  if (!stripeClient) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      throw new Error("STRIPE_SECRET_KEY environment variable is required");
+    }
+    stripeClient = new Stripe(key, {
+      apiVersion: "2023-10-16",
+    });
+  }
+  return stripeClient;
+};
 
 // Initialize Supabase on server
 const supabaseUrl = process.env.SUPABASE_URL || "";
@@ -39,7 +47,8 @@ const formatAddressForEhub = (addr: any) => {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  // Default to 3000 for local/preview environment, but respect PORT for Cloud Run
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -55,6 +64,7 @@ async function startServer() {
       // In a real app, you'd verify the rate price on the server
       const amount = Math.round(rate.totalAmount * 100); // Stripe expects cents
 
+      const stripe = getStripe();
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
         line_items: [
@@ -100,6 +110,7 @@ async function startServer() {
       // In a real app, verify the rate price on the server
       const amount = Math.round(rate.totalAmount * 100);
 
+      const stripe = getStripe();
       const paymentIntent = await stripe.paymentIntents.create({
         amount,
         currency: "usd",
@@ -125,9 +136,9 @@ async function startServer() {
       const EHUB_API_KEY = process.env.EHUB_API_KEY;
       const EHUB_BASE_URL = "https://api.ehub.com/api/v2";
 
-      if (!EHUB_API_KEY) {
-        console.error("EHUB_API_KEY is missing");
-        return res.status(500).json({ error: "Server configuration error" });
+      if (!EHUB_API_KEY || EHUB_API_KEY.trim() === '') {
+        console.error("EHUB_API_KEY is missing or empty");
+        return res.status(500).json({ error: "Server configuration error: eHub API key is not set." });
       }
 
       const response = await fetch(`${EHUB_BASE_URL}/rates`, {
@@ -348,6 +359,7 @@ async function startServer() {
 
   app.get("/api/checkout-session/:id", async (req, res) => {
     try {
+      const stripe = getStripe();
       const session = await stripe.checkout.sessions.retrieve(req.params.id);
       res.json(session);
     } catch (error: any) {
@@ -357,14 +369,20 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      console.log("Vite middleware loaded in development mode");
+    } catch (e) {
+      console.error("Failed to load Vite middleware:", e);
+    }
   } else {
     app.use(express.static("dist"));
-    app.get("*", (req, res) => {
+    app.get('(.*)', (req, res) => {
       res.sendFile("dist/index.html", { root: "." });
     });
   }

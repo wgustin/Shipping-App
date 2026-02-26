@@ -13,8 +13,8 @@ const getEnvVar = (key: string) => {
   return '';
 };
 
-const rawSupabaseUrl = getEnvVar('SUPABASE_URL');
-const SUPABASE_ANON_KEY = getEnvVar('SUPABASE_ANON_KEY');
+const rawSupabaseUrl = getEnvVar('SUPABASE_URL') || getEnvVar('VITE_SUPABASE_URL');
+const SUPABASE_ANON_KEY = getEnvVar('SUPABASE_ANON_KEY') || getEnvVar('VITE_SUPABASE_ANON_KEY');
 
 // Ensure URL has protocol
 const SUPABASE_URL = rawSupabaseUrl && !rawSupabaseUrl.startsWith('http') 
@@ -22,34 +22,24 @@ const SUPABASE_URL = rawSupabaseUrl && !rawSupabaseUrl.startsWith('http')
   : rawSupabaseUrl;
 
 let supabaseInstance: any = null;
-let initializationPromise: Promise<any> | null = null;
+
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  try {
+    supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        storageKey: 'shipeasy-auth-token', // Custom key to avoid conflicts with other apps on the same domain
+      }
+    });
+  } catch (e) {
+    console.error("Failed to initialize Supabase client", e);
+  }
+} else {
+  console.warn("Supabase credentials missing. Auth and DB features will be limited.");
+}
 
 export const getSupabase = async () => {
-  if (supabaseInstance) return supabaseInstance;
-  
-  if (initializationPromise) return initializationPromise;
-
-  initializationPromise = (async () => {
-    try {
-      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-        console.warn("Supabase credentials missing. Auth and DB features will be limited.");
-        return null;
-      }
-
-      supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: {
-          autoRefreshToken: true,
-          persistSession: true,
-          detectSessionInUrl: true
-        }
-      });
-      return supabaseInstance;
-    } catch (e) {
-      console.error("Failed to initialize Supabase client", e);
-      initializationPromise = null;
-      return null;
-    }
-  })();
-
-  return initializationPromise;
+  return supabaseInstance;
 };
