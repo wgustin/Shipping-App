@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    
+    function isCreatingOwnDoc() {
+      return isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "WGustin@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      // User can only read and write their own document
+      allow read, write: if isOwner(userId) || isAdmin();
+      
+      match /addresses/{addressId} {
+        // User can only read and write their own addresses
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /shipments/{shipmentId} {
+      // User can only read, update, delete shipments they own
+      allow read, update, delete: if isDocOwner() || isAdmin();
+      // User can only create shipments where they set themselves as the owner
+      allow create: if isCreatingOwnDoc() || isAdmin();
+    }
+  }
+}

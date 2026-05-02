@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user profile in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "balance": { "type": "number" },
+        "defaultFromAddressId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "email", "firstName", "lastName", "role"]
+    },
+    "Address": {
+      "title": "Address",
+      "description": "A saved address for a user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "company": { "type": "string" },
+        "street1": { "type": "string" },
+        "street2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zip": { "type": "string" },
+        "country": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "isDefaultFrom": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "name", "street1", "city", "state", "zip", "country"]
+    },
+    "Shipment": {
+      "title": "Shipment",
+      "description": "A shipment record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "fromAddress": { "$ref": "#/entities/Address" },
+        "toAddress": { "$ref": "#/entities/Address" },
+        "packageDetails": { "type": "object" },
+        "selectedRate": { "type": "object" },
+        "trackingNumber": { "type": "string" },
+        "labelUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["created", "processing", "shipped", "delivered", "cancelled", "error", "voided"] },
+        "processingStatus": { "type": "string", "enum": ["pending", "processing", "completed", "error", "locked"] },
+        "idempotencyKey": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "fromAddress", "toAddress", "packageDetails", "selectedRate", "status"]
+    },
+    "SecureRate": {
+      "title": "SecureRate",
+      "description": "A securely stored rate quote.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "rateId": { "type": "string" },
+        "amount": { "type": "number" },
+        "carrier": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "usedAt": { "type": "string", "format": "date-time" },
+        "originAddress": { "type": "object" },
+        "destinationAddress": { "type": "object" },
+        "parcelDetails": { "type": "array" }
+      },
+      "required": ["id", "userId", "rateId", "amount", "carrier", "serviceName", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles."
+    },
+    "/users/{userId}/addresses/{addressId}": {
+      "schema": { "$ref": "#/entities/Address" },
+      "description": "User's saved addresses."
+    },
+    "/shipments/{shipmentId}": {
+      "schema": { "$ref": "#/entities/Shipment" },
+      "description": "All shipments."
+    },
+    "/secure_rates/{rateId}": {
+      "schema": { "$ref": "#/entities/SecureRate" },
+      "description": "Securely stored rate quotes."
+    }
+  }
+}
